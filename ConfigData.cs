@@ -1,95 +1,69 @@
 ﻿using System;
 using System.Drawing;
 using System.IO;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Runtime.Serialization.Formatters.Binary;
 
 namespace SystemMonitor
 {
+    [Serializable]
     public class ConfigData
     {
-        private static readonly string ConfigFileName = "config.json";
-
-        public float Opacity { get; set; } = 1.0f; // 0 to 1
-        public int UpdateIntervalMs { get; set; } = 1000; // update every 1s by default
-
-        public bool AlwaysOnTop { get; set; } = false;
-        public bool AutoUpdate { get; set; } = true;
-
         public bool ShowCpu { get; set; } = true;
         public bool ShowGpu { get; set; } = true;
         public bool ShowRam { get; set; } = true;
+        public bool AlwaysOnTop { get; set; } = false;
 
-        public Color CpuColor { get; set; } = Color.Lime;
-        public Color GpuColor { get; set; } = Color.Red;
-        public Color RamColor { get; set; } = Color.Blue;
+        // Temperature toggles
+        public bool ShowCpuTemp { get; set; } = false;
+        public bool ShowGpuTemp { get; set; } = false;
 
-        public Color CpuTextColor { get; set; } = Color.White;
-        public Color GpuTextColor { get; set; } = Color.White;
-        public Color RamTextColor { get; set; } = Color.White;
+        // New display mode toggles
+        // If both false => graphs + text
+        public bool DisplayGraphsOnly { get; set; } = false;
+        public bool DisplayTextOnly { get; set; } = false;
 
-        public static ConfigData Current { get; private set; } = Load();
+        // Removed ShowCpuGraph, ShowGpuGraph, ShowRamGraph as obsolete
 
-        public static ConfigData Load()
-        {
-            try
-            {
-                if (!File.Exists(ConfigFileName))
-                    return new ConfigData();
+        public Color BackgroundColor { get; set; } = Color.Black;
+        public Color CpuGraphColor { get; set; } = Color.Green;
+        public Color GpuGraphColor { get; set; } = Color.Red;
+        public Color RamGraphColor { get; set; } = Color.Blue;
+        public Color TextColor { get; set; } = Color.White;
+        public Color ValueColor { get; set; } = Color.Yellow;
 
-                string json = File.ReadAllText(ConfigFileName);
-                var options = new JsonSerializerOptions
-                {
-                    Converters = { new ColorJsonConverter() },
-                    AllowTrailingCommas = true,
-                };
-                var config = JsonSerializer.Deserialize<ConfigData>(json, options);
+        // New properties to remember window size and location
+        public Size? WindowSize { get; set; } = null;
+        public Point? WindowLocation { get; set; } = null;
 
-                // Validate values
-                if (config.Opacity < 0f || config.Opacity > 1f) config.Opacity = 1.0f;
-                if (config.UpdateIntervalMs < 100) config.UpdateIntervalMs = 1000;
-
-                return config;
-            }
-            catch (Exception ex)
-            {
-                // Log error and return default config
-                Console.Error.WriteLine($"Failed to load config: {ex.Message}");
-                return new ConfigData();
-            }
-        }
+        private static string ConfigPath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.dat");
 
         public void Save()
         {
-            try
+            using (FileStream fs = new FileStream(ConfigPath, FileMode.Create))
             {
-                var options = new JsonSerializerOptions
+                BinaryFormatter formatter = new BinaryFormatter();
+                formatter.Serialize(fs, this);
+            }
+        }
+
+        public static ConfigData Load()
+        {
+            if (!File.Exists(ConfigPath))
+                return new ConfigData();
+
+            using (FileStream fs = new FileStream(ConfigPath, FileMode.Open))
+            {
+                BinaryFormatter formatter = new BinaryFormatter();
+                try
                 {
-                    WriteIndented = true,
-                    Converters = { new ColorJsonConverter() },
-                };
-                string json = JsonSerializer.Serialize(this, options);
-                File.WriteAllText(ConfigFileName, json);
+                    return (ConfigData)formatter.Deserialize(fs);
+                }
+                catch
+                {
+                    // If corrupted or incompatible config file, return default config
+                    return new ConfigData();
+                }
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Failed to save config: {ex.Message}");
-            }
-        }
-    }
-
-    public class ColorJsonConverter : JsonConverter<Color>
-    {
-        public override Color Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-        {
-            var s = reader.GetString();
-            return ColorTranslator.FromHtml(s);
-        }
-
-        public override void Write(Utf8JsonWriter writer, Color value, JsonSerializerOptions options)
-        {
-            string colorStr = ColorTranslator.ToHtml(value);
-            writer.WriteStringValue(colorStr);
         }
     }
 }

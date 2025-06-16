@@ -1,305 +1,210 @@
 ﻿using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using OpenHardwareMonitor.Hardware;
 
 namespace SystemMonitor
 {
     public partial class MainForm : Form
     {
-        private Timer updateTimer;
-        private Computer computer;
-
-        private ISensor cpuLoadSensor, cpuTempSensor;
-        private ISensor ramUsedSensor;
-        private ISensor gpuLoadSensor, gpuTempSensor, gpuRamUsedSensor;
-
-        private Label cpuLabel, gpuLabel, ramLabel;
-        private PictureBox cpuIcon, gpuIcon;
-        private GraphControl cpuGraph, gpuGraph, ramGraph;
-        private Button settingsButton, closeButton;
-
-        private Point lastMousePos;
-        private bool isDragging;
+        private SensorManager sensorManager;
+        private ConfigData config;
+        private Button closeButton;
+        private Panel topBar;
 
         public MainForm()
         {
-            ConfigData.Load();
-            InitializeForm();
-            InitializeSensors();
-            ApplySettings();
-            StartUpdateTimer();
+            LoadConfiguration();
+
+            this.ClientSize = new Size(820, 440); // Slightly bigger window
+
+            if (config.WindowLocation.HasValue)
+            {
+                this.StartPosition = FormStartPosition.Manual;
+                this.Location = config.WindowLocation.Value;
+            }
+
+            InitializeComponent();
+            InitializeTopBar();
+            ConfigureWindow();
+            InitializeSensorManager();
+            ApplyAlwaysOnTop();
+            UpdateTimer.Start();
+
+            LayoutStaticControls();
         }
 
-        private void InitializeForm()
+        private void InitializeTopBar()
+        {
+            topBar = new Panel();
+            topBar.Height = 35;
+            topBar.Dock = DockStyle.Top;
+            topBar.BackColor = Color.LightGray;
+            topBar.MouseDown += MainForm_MouseDown;
+            topBar.MouseEnter += (s, e) => closeButton.Visible = true;
+            topBar.MouseLeave += (s, e) => closeButton.Visible = false;
+            this.Controls.Add(topBar);
+
+            closeButton = new Button();
+            closeButton.Text = "X";
+            closeButton.Size = new Size(30, 25);
+            closeButton.Location = new Point(this.ClientSize.Width - 35, 5);
+            closeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            closeButton.FlatStyle = FlatStyle.Flat;
+            closeButton.BackColor = Color.LightGray;
+            closeButton.ForeColor = Color.Black;
+            closeButton.Visible = false;
+            closeButton.Click += (s, e) => this.Close();
+            topBar.Controls.Add(closeButton);
+
+            settingsButton.Text = "Settings";
+            settingsButton.Size = new Size(100, 25);
+            settingsButton.Font = new Font("Segoe UI", 10, FontStyle.Regular);
+            settingsButton.ForeColor = Color.Black;
+            settingsButton.BackColor = Color.White;
+            settingsButton.FlatStyle = FlatStyle.Standard;
+            settingsButton.Location = new Point(10, 5);
+            topBar.Controls.Add(settingsButton);
+        }
+
+        private void LoadConfiguration()
+        {
+            config = ConfigData.Load();
+        }
+
+        private void ConfigureWindow()
         {
             this.FormBorderStyle = FormBorderStyle.None;
-            this.BackColor = Color.Black;
-            this.DoubleBuffered = true;
+            this.BackColor = config.BackgroundColor;
 
-            this.MouseDown += (s, e) =>
-            {
-                if (e.Button == MouseButtons.Left)
-                {
-                    isDragging = true;
-                    lastMousePos = e.Location;
-                }
-            };
-            this.MouseMove += (s, e) =>
-            {
-                if (isDragging)
-                {
-                    this.Left += e.X - lastMousePos.X;
-                    this.Top += e.Y - lastMousePos.Y;
-                }
-            };
-            this.MouseUp += (s, e) =>
-            {
-                if (e.Button == MouseButtons.Left)
-                    isDragging = false;
-            };
+            int radius = 20;
+            var path = new GraphicsPath();
+            path.StartFigure();
+            path.AddArc(new Rectangle(0, 0, radius, radius), 180, 90);
+            path.AddLine(radius, 0, this.Width - radius, 0);
+            path.AddArc(new Rectangle(this.Width - radius, 0, radius, radius), 270, 90);
+            path.AddLine(this.Width, radius, this.Width, this.Height - radius);
+            path.AddArc(new Rectangle(this.Width - radius, this.Height - radius, radius, radius), 0, 90);
+            path.AddLine(this.Width - radius, this.Height, radius, this.Height);
+            path.AddArc(new Rectangle(0, this.Height - radius, radius, radius), 90, 90);
+            path.CloseFigure();
 
-            settingsButton = new Button
-            {
-                Text = "⚙",
-                ForeColor = Color.White,
-                BackColor = Color.DimGray,
-                FlatStyle = FlatStyle.Flat,
-                Size = new Size(30, 30),
-                Location = new Point(10, 5)
-            };
-            settingsButton.FlatAppearance.BorderSize = 0;
-            settingsButton.Click += OpenSettings_Click;
-            this.Controls.Add(settingsButton);
-
-            closeButton = new Button
-            {
-                Text = "X",
-                ForeColor = Color.White,
-                BackColor = Color.Red,
-                FlatStyle = FlatStyle.Flat,
-                Size = new Size(30, 30),
-                Location = new Point(45, 5),
-                Visible = false
-            };
-            closeButton.FlatAppearance.BorderSize = 0;
-            closeButton.Click += (s, e) => this.Close();
-            this.Controls.Add(closeButton);
-
-            this.MouseEnter += (s, e) => closeButton.Visible = true;
-            this.MouseLeave += (s, e) =>
-            {
-                var pos = this.PointToClient(Cursor.Position);
-                if (!closeButton.Bounds.Contains(pos))
-                    closeButton.Visible = false;
-            };
-
-            cpuIcon = new PictureBox
-            {
-                Image = Properties.Resources.intel_cpu,
-                SizeMode = PictureBoxSizeMode.StretchImage,
-                Size = new Size(24, 24)
-            };
-            this.Controls.Add(cpuIcon);
-
-            cpuLabel = new Label
-            {
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.White,
-                AutoSize = true
-            };
-            this.Controls.Add(cpuLabel);
-
-            cpuGraph = new GraphControl
-            {
-                Size = new Size(240, 20)
-            };
-            this.Controls.Add(cpuGraph);
-
-            gpuIcon = new PictureBox
-            {
-                Image = Properties.Resources.intel_gpu,
-                SizeMode = PictureBoxSizeMode.StretchImage,
-                Size = new Size(24, 24)
-            };
-            this.Controls.Add(gpuIcon);
-
-            gpuLabel = new Label
-            {
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.White,
-                AutoSize = true
-            };
-            this.Controls.Add(gpuLabel);
-
-            gpuGraph = new GraphControl
-            {
-                Size = new Size(240, 20)
-            };
-            this.Controls.Add(gpuGraph);
-
-            ramLabel = new Label
-            {
-                Font = new Font("Segoe UI", 9),
-                ForeColor = Color.White,
-                AutoSize = true
-            };
-            this.Controls.Add(ramLabel);
-
-            ramGraph = new GraphControl
-            {
-                Size = new Size(240, 20)
-            };
-            this.Controls.Add(ramGraph);
+            this.Region = new Region(path);
+            this.MouseDown += MainForm_MouseDown;
         }
 
-        private void InitializeSensors()
-        {
-            computer = new Computer()
-            {
-                CPUEnabled = true,
-                GPUEnabled = true,
-                RAMEnabled = true
-            };
-            computer.Open();
+        private const int WM_NCLBUTTONDOWN = 0xA1;
+        private const int HT_CAPTION = 0x2;
 
-            foreach (var hw in computer.Hardware)
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+
+        private void MainForm_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
             {
-                hw.Update();
-                foreach (var s in hw.Sensors)
-                {
-                    if (s.SensorType == SensorType.Load && s.Name == "CPU Total")
-                        cpuLoadSensor = s;
-                    else if (s.SensorType == SensorType.Temperature && s.Name.Contains("CPU"))
-                        cpuTempSensor = s;
-                    else if (s.SensorType == SensorType.Load && s.Name == "Memory")
-                        ramUsedSensor = s;
-                    else if (s.SensorType == SensorType.Load && s.Name.Contains("GPU Core"))
-                        gpuLoadSensor = s;
-                    else if (s.SensorType == SensorType.Temperature && s.Name.Contains("GPU"))
-                        gpuTempSensor = s;
-                    else if (s.SensorType == SensorType.Load && s.Name.Contains("GPU Memory"))
-                        gpuRamUsedSensor = s;
-                }
+                ReleaseCapture();
+                SendMessage(Handle, WM_NCLBUTTONDOWN, HT_CAPTION, 0);
             }
         }
 
-        private void StartUpdateTimer()
+        private void InitializeSensorManager()
         {
-            updateTimer = new Timer();
-            updateTimer.Interval = ConfigData.Current.UpdateIntervalMs;
-            updateTimer.Tick += (s, e) => UpdateSensorData();
+            sensorManager = new SensorManager();
 
-            if (ConfigData.Current.AutoUpdate)
-                updateTimer.Start();
+            graphControlCpu.LineColor = config.CpuGraphColor;
+            graphControlGpu.LineColor = config.GpuGraphColor;
+            graphControlRam.LineColor = config.RamGraphColor;
+
+            labelCpu.ForeColor = config.TextColor;
+            labelGpu.ForeColor = config.TextColor;
+            labelRam.ForeColor = config.TextColor;
+
+            labelCpuValue.ForeColor = config.ValueColor;
+            labelGpuValue.ForeColor = config.ValueColor;
+            labelRamValue.ForeColor = config.ValueColor;
+
+            labelCpuTemp.ForeColor = config.ValueColor;
+            labelGpuTemp.ForeColor = config.ValueColor;
         }
 
-        private void UpdateSensorData()
+        private void LayoutStaticControls()
         {
-            foreach (var hw in computer.Hardware)
-                hw.Update();
+            int margin = 20;
+            int labelWidth = 150;
+            int graphWidth = 300;
+            int spacing = 10;
+            int y = margin + 45; // Adjusted for top bar height
 
-            SetCpuInfo(cpuLoadSensor?.Value ?? 0, cpuTempSensor?.Value ?? 0);
-            SetGpuInfo(gpuLoadSensor?.Value ?? 0, gpuTempSensor?.Value ?? 0, gpuRamUsedSensor?.Value ?? 0);
-            SetRamInfo(ramUsedSensor?.Value ?? 0);
+            labelCpu.SetBounds(margin, y, labelWidth, 20);
+            labelCpuValue.SetBounds(margin, y + 20, labelWidth, 20);
+            labelCpuTemp.SetBounds(margin, y + 40, labelWidth, 20);
+            graphControlCpu.SetBounds(margin + labelWidth + spacing, y, graphWidth, 60);
+            y += 80;
+
+            labelGpu.SetBounds(margin, y, labelWidth, 20);
+            labelGpuValue.SetBounds(margin, y + 20, labelWidth, 20);
+            labelGpuTemp.SetBounds(margin, y + 40, labelWidth, 20);
+            graphControlGpu.SetBounds(margin + labelWidth + spacing, y, graphWidth, 60);
+            y += 80;
+
+            labelRam.SetBounds(margin, y, labelWidth, 20);
+            labelRamValue.SetBounds(margin, y + 20, labelWidth, 20);
+            labelRamInstalled.SetBounds(margin, y + 40, labelWidth + 50, 20);
+            labelRamUsed.SetBounds(margin, y + 60, labelWidth + 50, 20);
+            labelRamFree.SetBounds(margin, y + 80, labelWidth + 50, 20);
+            progressBarRamUsage.SetBounds(margin + labelWidth + spacing, y + 40, graphWidth, 20);
+            graphControlRam.SetBounds(margin + labelWidth + spacing, y, graphWidth, 60);
         }
 
-        private void ApplySettings()
+        private void ApplyAlwaysOnTop()
         {
-            this.Opacity = ConfigData.Current.Opacity;
-            this.TopMost = ConfigData.Current.AlwaysOnTop;
-
-            cpuGraph.GraphColor = ConfigData.Current.CpuColor;
-            gpuGraph.GraphColor = ConfigData.Current.GpuColor;
-            ramGraph.GraphColor = ConfigData.Current.RamColor;
-
-            cpuLabel.ForeColor = ConfigData.Current.CpuTextColor;
-            gpuLabel.ForeColor = ConfigData.Current.GpuTextColor;
-            ramLabel.ForeColor = ConfigData.Current.RamTextColor;
-
-            UpdateVisibilityAndLayout();
-
-            if (updateTimer != null)
-            {
-                updateTimer.Interval = ConfigData.Current.UpdateIntervalMs;
-                if (ConfigData.Current.AutoUpdate)
-                    updateTimer.Start();
-                else
-                    updateTimer.Stop();
-            }
+            this.TopMost = config.AlwaysOnTop;
         }
 
-        private void UpdateVisibilityAndLayout()
+        private void UpdateTimer_Tick(object sender, EventArgs e)
         {
-            int marginTop = 40;
-            int sectionSpacing = 50;
+            sensorManager.Update();
 
-            int y = marginTop;
+            float cpuUsage = sensorManager.CpuUsage;
+            float gpuUsage = sensorManager.GpuUsage;
+            float ramUsage = sensorManager.RamUsage;
 
-            cpuIcon.Visible = cpuLabel.Visible = cpuGraph.Visible = ConfigData.Current.ShowCpu;
-            if (ConfigData.Current.ShowCpu)
-            {
-                cpuIcon.Location = new Point(10, y);
-                cpuLabel.Location = new Point(40, y);
-                cpuGraph.Location = new Point(10, y + 22);
-                y += sectionSpacing;
-            }
+            labelCpuValue.Text = $"{cpuUsage:F1}%";
+            labelGpuValue.Text = $"{gpuUsage:F1}%";
+            labelRamValue.Text = $"{ramUsage:F1}%";
 
-            gpuIcon.Visible = gpuLabel.Visible = gpuGraph.Visible = ConfigData.Current.ShowGpu;
-            if (ConfigData.Current.ShowGpu)
-            {
-                gpuIcon.Location = new Point(10, y);
-                gpuLabel.Location = new Point(40, y);
-                gpuGraph.Location = new Point(10, y + 22);
-                y += sectionSpacing;
-            }
+            labelCpuTemp.Text = sensorManager.CpuTemp.HasValue ? $"{sensorManager.CpuTemp.Value:F1} °C" : "N/A";
+            labelGpuTemp.Text = sensorManager.GpuTemp.HasValue ? $"{sensorManager.GpuTemp.Value:F1} °C" : "N/A";
 
-            ramLabel.Visible = ramGraph.Visible = ConfigData.Current.ShowRam;
-            if (ConfigData.Current.ShowRam)
-            {
-                ramLabel.Location = new Point(10, y);
-                ramGraph.Location = new Point(10, y + 22);
-                y += sectionSpacing;
-            }
+            labelRamInstalled.Text = $"Installed RAM: {sensorManager.RamInstalledGB:F1} GB";
+            labelRamUsed.Text = $"Used RAM: {sensorManager.RamUsedGB:F1} GB";
+            labelRamFree.Text = $"Free RAM: {sensorManager.RamFreeGB:F1} GB";
 
-            this.Size = new Size(270, y + 10);
+            progressBarRamUsage.Value = (int)ramUsage;
+
+            graphControlCpu.AddValue(cpuUsage);
+            graphControlGpu.AddValue(gpuUsage);
+            graphControlRam.AddValue(ramUsage);
         }
 
-        private void SetCpuInfo(float usage, float temp)
+        private void settingsButton_Click(object sender, EventArgs e)
         {
-            cpuLabel.Text = $"CPU: {usage:F1}% @ {temp:F1}°C";
-            cpuGraph.AddValue(usage);
-        }
-
-        private void SetGpuInfo(float usage, float temp, float ram)
-        {
-            gpuLabel.Text = $"GPU: {usage:F1}% @ {temp:F1}°C";
-            gpuGraph.AddValue(usage);
-        }
-
-        private void SetRamInfo(float usage)
-        {
-            ramLabel.Text = $"RAM: {usage:F1}%";
-            ramGraph.AddValue(usage);
-        }
-
-        private void OpenSettings_Click(object sender, EventArgs e)
-        {
-            using (var settings = new SettingsForm())
+            using (SettingsForm settings = new SettingsForm(config))
             {
                 if (settings.ShowDialog() == DialogResult.OK)
                 {
-                    ConfigData.Save();
-                    ApplySettings();
+                    config = settings.Config;
+                    config.Save();
+
+                    ApplyAlwaysOnTop();
+                    LayoutStaticControls();
+                    UpdateTimer_Tick(null, null);
                 }
             }
-        }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            base.OnFormClosing(e);
-            updateTimer?.Dispose();
-            computer?.Close();
         }
     }
 }
